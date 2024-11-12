@@ -1,0 +1,100 @@
+## Metadata
+Article:    023
+Paragraph:  002_1
+LLM Model:  llama-3.1-70b-versatile
+Prompt:     data/prompts/deontic_system_v9.txt
+Timestamp:  2024-11-10 19:00:57.566
+In Tokens:  3954
+Out Tokens: 206
+
+### Full provision (For reference)
+2.   Where an importer has sufficient reason to consider that a high-risk AI system is not in conformity with this Regulation, or is falsified, or accompanied by falsified documentation, it shall not place the system on the market until it has been brought into conformity. Where the high-risk AI system presents a risk within the meaning of Article 79(1), the importer shall inform the provider of the system, the authorised representative and the market surveillance authorities to that effect.
+
+## Sentence (Processed by the LLM):
+Where the high-risk AI system presents a risk within the meaning of Article 79(1), the importer shall inform the provider of the system, the authorised representative and the market surveillance authorities to that effect.
+
+## Evaluation:
+TODO:
+    - Evaluate using a grade-based system each aspect of the output: ObligationTypeClassification, BurdenedEntity, Object, etc.
+    - For the "ObligationTypeClassification" and "ActionTypeClassification" (only for Obl. of Act), use the following grades:
+        * [0] -> Wrong Classification
+        * [1] -> Correct Classification
+    - For the *other fields* (BurdenedEntity, Entity, etc) use the following grades:
+        * [0] -> incorrect identification, incorrect implicit/explicit
+        * [1] -> correct identification, incorrect implicit/explicit
+        * [2] -> correct identification, correct implicit/explicit
+    - Replace each [X] with [0], [1], or [2]
+
+**Grades**
+[BINARY CLASSIFICATION (0 or 1)]
+1. ObligationTypeClassification: [1]
+2. ActionTypeClassification:     [1]
+
+[MULTI CLASSIFICATION (0, 1 or 2)]
+1. Objects:                      [2]
+2. Predicate:                    [2]
+3. BurdenedPerson:               [2]
+4. Standards:                    [2]
+5. Pre-Conditions:               [2]
+6. Beneficiaries:                [2]
+
+
+## LLM OUTPUT
+TODO:
+    - read the regulation text above.
+    - Check the LLM output below.
+    - Read the evaluation instructions above.
+    - Give your grade for each of the entities in the JSON (above), by replacing [X] with your grade.
+    - Save and go  to the next file.
+    - After finishing the evaluation for all the samples, send the resulting files to Thiago.
+```
+[
+   {
+      "ObligationTypeClassification": "Obligation of Action",
+      "ActionTypeClassification": "Duty to inform a specific person",
+      "Objects": [
+         {
+            "stated": "yes",
+            "value": "the risk presented by the high-risk AI system"
+         }
+      ],
+      "Predicate": {
+         "stated": "yes",
+         "value": "shall inform",
+         "verb": "active"
+      },
+      "BurdenedPersons": [
+         {
+            "stated": "yes",
+            "value": "the importer"
+         }
+      ],
+      "Standards": [
+         {
+            "stated": "no",
+            "value": null
+         }
+      ],
+      "Pre-Conditions": [
+         {
+            "stated": "yes",
+            "value": "Where the high-risk AI system presents a risk within the meaning of Article 79(1)"
+         }
+      ],
+      "Beneficiaries": [
+         {
+            "stated": "yes",
+            "value": "the provider of the system"
+         },
+         {
+            "stated": "yes",
+            "value": "the authorised representative"
+         },
+         {
+            "stated": "yes",
+            "value": "the market surveillance authorities"
+         }
+      ]
+   }
+]
+```

@@ -1,9 +1,9 @@
 from dotenv import load_dotenv
-from deontic_extraction import (
-    divide_sample, 
-    obligation_extraction, 
-    organize_filtered_data, 
-    setup_logging
+from src.deontic_extraction import (
+    divide_sample,
+    obligation_extraction,
+    organize_filtered_data,
+    setup_logging, OBLIGATIONS_DATA
 )
 import logging
 
@@ -19,7 +19,7 @@ def main():
 
     try:
         logging.info("Organizing filtered data...")
-        organize_filtered_data()
+        organize_filtered_data(OBLIGATIONS_DATA)
         logging.info("Extracting obligations...")
         obligation_extraction()
         logging.info("Dividing sample data...")

@@ -5,26 +5,34 @@ import random
 import re
 import time
 
-from typing import List, Dict, Tuple, Any, Set
+from typing import List, Dict, Any, Optional
 import ollama
 from groq import Groq
 
+# Configuration Management
+MAX_API_CALL_RETRIES = int(os.environ.get("MAX_API_CALL_RETRIES", 5))
 WAIT_FOR_NEXT_CALL = 60
+GROQ_API_KEYS = [s.strip() for s in os.environ.get("GROQ_API_KEY", "").split(",")]
+
+# Ensure there's apt least one API key
+if not GROQ_API_KEYS:
+    logging.error("GROQ_API_KEY environment variable is not set or is empty.")
+    raise ValueError("GROQ_API_KEY environment variable is not set or is empty.")
 
 
-def call_llm(prompt, model="llama3.1", temperature=0.6, max_tokens=200, top_p=0.9):
+def call_llm(prompt: str, model: str = "llama3.1", temperature: float = 0.6, max_tokens: int = 200, top_p: float = 0.9) -> str:
     """
     Generate a response from the specified Ollama model based on the provided prompt and parameters.
     
     Args:
-    - prompt (str): The input prompt for the model to generate a response.
-    - model (str): The model to be used for generating the response (default is "llama2").
-    - temperature (float): Controls the randomness of the output (default is 0.7).
-    - max_tokens (int): The maximum number of tokens in the generated response (default is 200).
-    - top_p (float): Controls the diversity of responses (default is 0.9).
-    
+        prompt (str): The input prompt for the model to generate a response.
+        model (str): The model to be used for generating the response (default is "llama3.1").
+        temperature (float): Controls the randomness of the output (default is 0.6).
+        max_tokens (int): The maximum number of tokens in the generated response (default is 200).
+        top_p (float): Controls the diversity of responses (default is 0.9).
+
     Returns:
-    - str: The generated response text from the model.
+        str: The generated response text from the model.
     """
     try:
         response = ollama.chat(
@@ -32,94 +40,53 @@ def call_llm(prompt, model="llama3.1", temperature=0.6, max_tokens=200, top_p=0.
             messages=[{'role': 'user', 'content': prompt}],
             stream=False
         )
-        logging.info(response["message"]["content"])
-        return response.get('text', 'No response text found.')
-
+        logging.info(f"Response from Ollama: {response.get('message', {}).get('content', 'No response text found.')}")
+        return response.get('message', {}).get('content', 'No response text found.')
     except Exception as e:
+        logging.error(f"Error calling Ollama: {e}")
         return f"An error occurred: {e}"
 
 
-def setup_api() -> Groq:
+class GroqApiClient:
     """
-    Sets up the Groq API client.
-
-    Returns:
-        Groq: The Groq API client.
+    A factory class to manage Groq API client instances.
     """
+    def __init__(self):
+        list_keys = [s.strip() for s in os.environ.get("GROQ_API_KEY").split(",")]
+        random.shuffle(list_keys)
+        self._api_key = list_keys[0]
 
-    list_keys = [s.strip() for s in os.environ.get("GROQ_API_KEY").split(",")]
-    random.shuffle(list_keys)
+        self.client = Groq(api_key=self._api_key)
+        logging.info(f"Switching API token to '{self._api_key[:4]}...{self._api_key[-4:]}'")
 
-    api_key = list_keys[0]
-    logging.info(f"Switching API token to '{api_key[:4]}...{api_key[-4:]}'")
+    @staticmethod
+    def _select_random_api_key() -> str|List[str]:
+        """Selects a random API key from the list."""
+        if not GROQ_API_KEYS:
+            logging.error("No API keys available.")
+            raise ValueError("No API keys available.")
+        random.shuffle(GROQ_API_KEYS)
+        return GROQ_API_KEYS
 
-    return Groq(api_key=api_key)
+    def get_client(self) -> Groq:
+        """Returns the Groq API client instance."""
+        return self.client
 
 
-def check_structure(data, structure):
+def check_structure(data: Any, structure: Any) -> bool:
     """
     Recursively checks if the given `data` matches the specified `structure`.
 
-    This function validates that a JSON-like dictionary (`data`) adheres to a predefined structure (`structure`)
-    by recursively comparing each element's type and structure. The function is designed to handle complex
-    JSON schemas, including nested dictionaries and lists, ensuring that each key, value type, and nested
-    structure aligns with the expected schema.
-
-    Parameters:
-    ----------
-    data : Any
-        The JSON data (usually a dictionary or list) to be validated.
-    structure : Any
-        The expected structure for `data`. It can be a dictionary defining nested keys and types, a list
-        defining expected list structure, or a basic type (e.g., `str`, `int`).
+    Args:
+        data (Any): The JSON data to be validated.
+        structure (Any): The expected structure for `data`.
 
     Returns:
-    -------
-    bool
-        True if `data` matches the `structure`, False otherwise.
-
-    Structure Guidelines:
-    ---------------------
-    - Dictionaries (`dict`): Both `data` and `structure` should be dictionaries. `data` must have all keys
-      in `structure`, and the value of each key in `data` must match the expected type or structure in `structure`.
-    - Lists (`list`): Both `data` and `structure` should be lists. `data` is validated against the first
-      item in `structure` (assumes homogeneous lists). If `structure` is an empty list, any list `data` is allowed.
-    - Basic Types (`str`, `int`, etc.): `data` must match the exact type specified in `structure`.
-
-    Example:
-    --------
-    Given a structure definition:
-    structure = {
-        "id": str,
-        "values": [
-            {
-                "name": str,
-                "age": int
-            }
-        ]
-    }
-
-    The following data would match:
-    data = {
-        "id": "123",
-        "values": [
-            {"name": "Alice", "age": 30},
-            {"name": "Bob", "age": 25}
-        ]
-    }
-
-    The following data would NOT match (incorrect types):
-    data = {
-        "id": 123,  # Should be a string
-        "values": [
-            {"name": "Alice", "age": "30"}  # Age should be an int
-        ]
-    }
+        bool: True if `data` matches the `structure`, False otherwise.
     """
     if isinstance(structure, dict):
         if not isinstance(data, dict):
             return False
-        # Check that each key in the structure matches in data and recursively validate
         for key, value_type in structure.items():
             if key not in data or not check_structure(data[key], value_type):
                 return False
@@ -127,73 +94,78 @@ def check_structure(data, structure):
     elif isinstance(structure, list):
         if not isinstance(data, list):
             return False
-        if len(structure) == 0:  # Allow empty lists
+        if not structure:
             return True
-        # Assume homogeneous lists (e.g., list of dictionaries with same structure)
         return all(check_structure(item, structure[0]) for item in data)
     else:
-        # Direct type comparison for strings, ints, etc.
         return isinstance(data, structure)
 
 
-def extract_dict(data: str) -> dict:
+def extract_dict(data: str) -> Optional[Dict]:
+    """
+    Extracts a dictionary from a string containing a JSON object enclosed in triple backticks (```json).
+
+    Args:
+        data (str): The string containing the JSON object.
+
+    Returns:
+        Optional[Dict]: The extracted dictionary or None if no valid JSON object is found.
+    """
     data = data.replace("```json", "```")
     json_match = re.search(r'```(.*?)```', data, re.DOTALL)
 
     if json_match:
-        json_str = json_match.group(1)  # This is the JSON string
-    else:
-        json_str = None
-
-    # Load the JSON string into a Python dictionary
-    if json_str:
-        extracted_dict = json.loads(json_str)
-    else:
-        extracted_dict = None
-    return extracted_dict
+        json_str = json_match.group(1).strip()
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            logging.error("Error decoding JSON.")
+    return None
 
 
-def run_prompt(client: Groq, system_prompt: str, user_prompt: str, model_name: str, output_json=True) -> str:
+def run_prompt(client: Groq, system_prompt: str, user_prompt: str, model_name: str, output_json: bool = True) -> Any:
+    """
+    Runs a prompt through the specified model and process its output.
+
+    Args:
+        client (Groq): The Groq API client instance.
+        system_prompt (str): The system prompt to set the context.
+        user_prompt (str): The user prompt to generate a response.
+        model_name (str): The name of the model to use.
+        output_json (bool): Whether to extract JSON from the response.
+
+    Returns:
+        Any: The processed response, either as a JSON object or a string.
+    """
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
-    result = None
-    for i in range(int(os.environ.get("MAX_API_CALL_RETRIES"))):
+
+    for attempt in range(MAX_API_CALL_RETRIES):
         try:
-
-            # Make the API call
-            result = api_call(client, messages, model_name=model_name)
-
+            result = make_api_call(client, messages, model_name=model_name)
             if output_json:
                 result = extract_dict(result)
-
-            break
-
+            return result
         except Exception as e:
-            # Log the error and continue to the next iteration
-            logging.error(f"Error during extraction: {e}")
-
+            logging.error(f"Error during API call (attempt {attempt + 1}): {e}")
             sleep_period = WAIT_FOR_NEXT_CALL * (random.random() + 1)
-            logging.info(f"Sleeping for {sleep_period:.3f} seconds")
+            logging.info(f"Retrying in {sleep_period:.3f} seconds")
             time.sleep(sleep_period)
-
-    sleep_period = WAIT_FOR_NEXT_CALL * (random.random() + 1)
-    logging.info(f"Sleeping for {sleep_period:.3f} seconds")
-    time.sleep(sleep_period)
-    return result
+    raise Exception("Failed to make API call after retries")
 
 
-def api_call(client: Groq, messages: List[Dict], temperature: float = 0.7, max_tokens: int = 4000,
-             model_name="llama3-70b-8192") -> str:
+def make_api_call(client: Groq, messages: List[Dict[str, str]], model_name: str, temperature: float = 0.7, max_tokens: int = 4000) -> str:
     """
-    Makes an API call to the Groq API.
+    Makes an API call to the specified model.
 
     Args:
-        client (Groq): Groq client.
-        messages (List[Dict]): List of messages to send.
-        temperature (float): Temperature to use.
-        max_tokens (int): Maximum number of tokens to use.
+        client (Groq): The Groq API client instance.
+        messages (List[Dict[str, str]]): List of messages to send.
+        model_name (str): The name of the model to use.
+        temperature (float): Temperature to use for response generation.
+        max_tokens (int): Maximum number of tokens to generate.
 
     Returns:
         str: The response from the API.
@@ -213,53 +185,68 @@ def api_call(client: Groq, messages: List[Dict], temperature: float = 0.7, max_t
         "llama-3.2-3b-preview"
     ]
 
-    def groq_model():
-        for attempt in range(int(os.environ.get("MAX_API_CALL_RETRIES"))):
-            try:
-                logging.info(f"Sending request to {model_name} with temperature {temperature}, max")
-                completion = client.chat.completions.create(
-                    model=model_name,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    top_p=0.9,
-                    stream=False,
-                    stop=None,
-                    frequency_penalty=1.0
-                )
-                return completion.choices[0].message.content
-            except Exception as e:
-                logging.error(f"Error during API call (attempt {attempt + 1}): {e}")
-                wait_time = WAIT_FOR_NEXT_CALL * (1 + attempt*random.random())
-                logging.info(f"Trying again in {wait_time:.2f} seconds")
-                time.sleep(wait_time)
-
-        raise Exception("Failed to make API call after retries")
-
-    def ollama_model():
-        response = ollama.chat(model=model_name, messages=messages, stream=False, options={"temperature": temperature})
-        return response['message']['content']
-
     if model_name in GROQ_MODELS:
-        return groq_model()
+        logging.info(f"Sending request to {model_name} with temperature {temperature}, max_tokens {max_tokens}")
+        return _call_groq_model(client, messages, model_name, temperature, max_tokens)
     elif model_name in OLLAMA_MODELS:
-        return ollama_model()
+        logging.info(f"Sending request to {model_name} with temperature {temperature}")
+        return _call_ollama_model(messages, model_name, temperature)
+    else:
+        raise ValueError("Invalid model name.")
 
-    raise Exception("Wrong selected model.")
+
+def _call_groq_model(client: Groq, messages: List[Dict[str, str]], model_name: str, temperature: float, max_tokens: int) -> str:
+    """Make a call to the Groq model."""
+
+    for attempt in range(MAX_API_CALL_RETRIES):
+        try:
+            completion = client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=0.9,
+                stream=False,
+                stop=None,
+                frequency_penalty=1.0
+            )
+            return completion.choices[0].message.content
+        except Exception as e:
+            logging.error(f"Error during API call (attempt {attempt + 1}): {e}")
+            wait_time = WAIT_FOR_NEXT_CALL * (1 + attempt * random.random())
+            logging.info(f"Retrying in {wait_time:.2f} seconds")
+            time.sleep(wait_time)
+    raise Exception("Failed to make API call after retries")
 
 
-def extract_json_from_string(text):
-    # Use regex to find JSON-like structures
+def _call_ollama_model(messages: List[Dict[str, str]], model_name: str, temperature: float) -> str:
+    """Make a call to the Ollama model."""
+    response = ollama.chat(
+        model=model_name,
+        messages=messages,
+        stream=False,
+        options={"temperature": temperature}
+    )
+    return response.get('message', {}).get('content', 'No response text found.')
+
+
+def extract_json_from_string(text: str) -> Any:
+    """
+    Extracts a JSON object from a string using regex.
+
+    Args:
+        text (str): The string containing the JSON object.
+
+    Returns:
+        Any: The extracted JSON object, or a message if no JSON is found or decoding fails.
+    """
     json_pattern = r'\{.*?\}'  # This will match a JSON object
     match = re.search(json_pattern, text)
 
     if match:
-        json_str = match.group(0)  # Extract the matched JSON string
+        json_str = match.group(0).strip()
         try:
-            json_data = json.loads(json_str)  # Convert the string to a JSON object
-            return json_data
+            return json.loads(json_str)
         except json.JSONDecodeError:
-            return "Error decoding JSON."
-    else:
-        return "No JSON found."
-
+            logging.error("Error decoding JSON.")
+    return "No JSON found."

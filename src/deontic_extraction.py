@@ -1,14 +1,12 @@
-import re
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 import json
 
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Tuple
 
 import numpy as np
 import tqdm
-from dotenv import load_dotenv
 from matplotlib import pyplot as plt
 from sentence_transformers import SentenceTransformer, util
 
@@ -22,15 +20,17 @@ import glob
 import logging
 import tiktoken
 
-from llm import setup_api, run_prompt, api_call, random_request
+from src.llm import GroqApiClient, run_prompt
 
-JSON_DATA = "data/raw/obligations.json"
+OBLIGATIONS_DATA = "data/raw/ai_act_provisions.json"
+SELECTED_PROVISIONS = "data/raw/selected_provisions.json"
+IGNORED_PROVISIONS = "data/raw/ignored_provisions.json"
 FILTERED_JSON_DATA = "data/raw/obligationsSubjects.json"
 LLM_MODEL = "llama-3.1-70b-versatile"
 
 SYSTEM_PROMPT = "data/prompts/system_prompt.txt"
 USER_PROMPT = "data/prompts/user_prompt.txt"
-VALIDATION_SAMPLE_SIZE=40
+VALIDATION_SAMPLE_SIZE = 40
 
 
 def setup_logging(level=logging.INFO):
@@ -170,63 +170,15 @@ def remove_sentence_subject(context, sentence, subject):
     return False
 
 
-def organize_filtered_data():
-    def process_provision_data(target: dict):
-        provision_id = target["par_id"]
-        provision_text = target["text"]
-        sentences = target["sentences"]
+def plot_token_distribution(data: List[int], output_path: Path):
+    """
+    Plot the histogram of token counts and save it as a PDF.
 
-        return provision_id, provision_text, sentences
-
-   
-    provisions = load_json(Path(FILTERED_JSON_DATA))
-
-    samples = []
-    logging.info("Processing provisions...")
-
-    ignored_provisions = []
-    included_provisions = []
-
-    for index, provision in tqdm.tqdm(enumerate(provisions)):
-        logging.info(f"Processing provision {index + 1}/{len(provisions)}")
-        provision_id, provision_text, sentences = process_provision_data(provision)
-
-        for sentence_index, sentence in enumerate(sentences):
-
-            sentence_content = sentence["text"]
-            sentence_subject = sentence["subject"]
-            sentence_tokens = count_tokens(sentence_content)
-            sentence_provision_proportion = float(len(sentence_content) / len(provision_text))
-
-            prov_sentence = {
-                "provision_id": provision_id,
-                "sentence_id": sentence_index,
-                "full_text": provision_text,
-                "sentence": sentence_content,
-                "subject": sentence_subject,
-                "sentence_provision_proportion": sentence_provision_proportion,
-                "sentence_tokens": sentence_tokens,
-            }
-
-            if type(sentence_subject) == list or sentence_tokens > 50:
-                ignored_provisions.append(prov_sentence)
-                continue  # List appears when there is no subject or there are too many tokens.
-
-            # Filter sentence.
-            if not remove_sentence_subject(provision_text, sentence_content, sentence_subject):
-                included_provisions.append(prov_sentence)
-            else:
-                ignored_provisions.append(prov_sentence)
-
-    logging.info("Finished processing provisions.")
-
-    logging.info(f"Ignored sentences: {len(ignored_provisions)}")
-    logging.info(f"Included sentences: {len(included_provisions)}")
-
-    store_json(Path("data/raw/selected_provisions.json"), included_provisions)
-    store_json(Path("data/raw/ignored_provisions.json"), ignored_provisions)
-
-    data = [v["sentence_tokens"] for v in included_provisions]
+    Args:
+        data (List[int]): The list of token counts.
+        output_path (Path): The path to save the plot.
+    """
+    plt.figure(figsize=(10, 6))
 
     # Calculate quartiles
     Q1, Q2, Q3 = np.percentile(data, [25, 50, 75])
@@ -243,14 +195,130 @@ def organize_filtered_data():
     plt.legend()
     plt.xlabel('Tokens')
     plt.ylabel('Frequency')
-    plt.title('Histogram of Token counts')
+    plt.title('Histogram of Token Counts')
 
-    # Show plot
+    # Save plot
     plt.tight_layout()
-    plt.savefig("data/regulations/token_distribution_sentences.pdf", dpi=300)
+    plt.savefig(output_path, dpi=300)
+    plt.close()
 
-    return included_provisions, ignored_provisions
 
+def process_provision_data(target: Dict) -> Tuple[str, str, List]:
+    """
+    Process the provision data to extract relevant details.
+
+    Args:
+        target (Dict): The provision data.
+
+    Returns:
+        Tuple[str, str, List]: The provision ID, provision text, and list of sentences.
+    """
+    provision_id = target.get("par_id", "")
+    provision_text = target.get("text", "")
+    sentences = target.get("sentences", [])
+
+    return provision_id, provision_text, sentences
+
+
+def filter_sentence(provision_text: str, sentence_content: str, sentence_subject: Any, sentence_tokens: int) -> bool:
+    """
+    Determine if a sentence should be included or ignored.
+
+    Args:
+        provision_text (str): The full provision text.
+        sentence_content (str): The sentence text.
+        sentence_subject (Any): The subject of the sentence.
+        sentence_tokens (int): The number of tokens in the sentence.
+
+    Returns:
+        bool: True if the sentence should be ignored, False if it should be included.
+    """
+    if isinstance(sentence_subject, list) or sentence_tokens > 200:
+        return True
+    if remove_sentence_subject(provision_text, sentence_content, sentence_subject):
+        return True
+    return False
+
+
+def process_sentences(provision_id: str, provision_text: str, sentences: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
+    """
+    Process sentences of a provision and categorize them as included or ignored.
+
+    Args:
+        provision_id (str): The provision ID.
+        provision_text (str): The full provision text.
+        sentences (List[Dict]): The list of sentences.
+
+    Returns:
+        Tuple[List[Dict], List[Dict]]: The list of included and ignored sentences.
+    """
+    included_sentences = []
+    ignored_sentences = []
+
+    for sentence_index, sentence in enumerate(sentences):
+        sentence_content = sentence.get("text", "")
+        sentence_subject = sentence.get("subject", "")
+        sentence_tokens = count_tokens(sentence_content)
+        sentence_provision_proportion = float(len(sentence_content) / len(provision_text)) if provision_text else 0.0
+
+        prov_sentence = {
+            "provision_id": provision_id,
+            "sentence_id": sentence_index,
+            "full_text": provision_text,
+            "sentence": sentence_content,
+            "subject": sentence_subject,
+            "sentence_provision_proportion": sentence_provision_proportion,
+            "sentence_tokens": sentence_tokens,
+        }
+
+        if filter_sentence(provision_text, sentence_content, sentence_subject, sentence_tokens):
+            ignored_sentences.append(prov_sentence)
+        else:
+            included_sentences.append(prov_sentence)
+
+    return included_sentences, ignored_sentences
+
+
+def organize_filtered_data(obligation_path):
+    """
+    Process provisions by filtering sentences based on certain criteria and store the results.
+
+    Returns:
+        Tuple[List[Dict], List[Dict]]: The included and ignored provisions.
+    """
+
+    if type(obligation_path) != Path:
+        obligation_path = Path(str(obligation_path))
+
+    provisions = load_json(obligation_path)
+
+    all_included_provisions = []
+    all_ignored_provisions = []
+
+    logging.info("Processing provisions...")
+
+    for index, provision in tqdm.tqdm(enumerate(provisions), total=len(provisions)):
+        logging.info(f"Processing provision {index + 1}/{len(provisions)}")
+        provision_id, provision_text, sentences = process_provision_data(provision)
+
+        included_sentences, ignored_sentences = process_sentences(provision_id, provision_text, sentences)
+
+        all_included_provisions.extend(included_sentences)
+        all_ignored_provisions.extend(ignored_sentences)
+
+    logging.info("Finished processing provisions.")
+
+    logging.info(f"Ignored sentences: {len(all_ignored_provisions)}")
+    logging.info(f"Included sentences: {len(all_included_provisions)}")
+
+    store_json(Path(SELECTED_PROVISIONS), all_included_provisions)
+    store_json(Path(IGNORED_PROVISIONS), all_ignored_provisions)
+
+    token_counts = [v["sentence_tokens"] for v in all_included_provisions]
+
+    plot_token_distribution(token_counts, Path("data/outputs/token_distribution_sentences.pdf"))
+
+    return all_included_provisions, all_ignored_provisions
 
 
 def count_tokens(text: str, model: str = "gpt-3.5-turbo") -> int:
@@ -274,14 +342,14 @@ def count_tokens(text: str, model: str = "gpt-3.5-turbo") -> int:
     return len(tokens)
 
 
-def run_llm(sentence:str, context:str, model_name: str):
-    client = setup_api()
+def run_llm(sentence: str, context: str, model_name: str):
+    client = GroqApiClient().get_client()
 
     system_prompt = open(SYSTEM_PROMPT).read()
     user_prompt = open(USER_PROMPT).read()
 
-    user_prompt= user_prompt.replace("@SENTENCE", sentence)
-    user_prompt= user_prompt.replace("@CONTEXT", context)
+    user_prompt = user_prompt.replace("@SENTENCE", sentence)
+    user_prompt = user_prompt.replace("@CONTEXT", context)
 
     result = run_prompt(
         client=client,
@@ -297,7 +365,7 @@ def run_llm(sentence:str, context:str, model_name: str):
 
 
 def divide_sample():
-    file_paths = glob.glob("data/regulations/labeling/*.txt")
+    file_paths = glob.glob("data/outputs/*.txt")
 
     # Define destination folders for each expert
     expert_folders = {
@@ -332,7 +400,7 @@ def divide_sample():
             expert3_files.append(file)
             # expert1_files.append(file)
 
-    #random.seed(10)
+    # random.seed(10)
     random.shuffle(expert1_files)
     random.shuffle(expert2_files)
     random.shuffle(expert3_files)
@@ -352,7 +420,7 @@ def divide_sample():
 
 def create_labeling_template(samples: dict, target_key: str, llm_output: dict, input_token_count: int,
                              output_token_count: int) -> None:
-    with open("data/regulations/sample_template.txt") as fp:
+    with open("data/raw/sample_template.txt") as fp:
         template_text = fp.read()
 
     article, paragraph = target_key.split(".")
@@ -368,7 +436,7 @@ def create_labeling_template(samples: dict, target_key: str, llm_output: dict, i
     template_text = template_text.replace("@PROMPT", str(SYSTEM_PROMPT))
     template_text = template_text.replace("@TIMESTAMP", datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3])
 
-    with open(f"data/regulations/labeling/{target_key}.txt", "w") as fp:
+    with open(f"data/outputs/{target_key}.txt", "w") as fp:
         fp.write(template_text)
 
 
@@ -386,8 +454,8 @@ def calculate_expected_finish(start_time, current_iteration, total_iterations):
     # Return the expected finish time
     return expected_finish_time
 
-def obligation_extraction():
 
+def obligation_extraction():
     def calculate_filename(s):
         result = f"{s['provision_id']}_{s['sentence_id']}.txt"
         return result
@@ -395,7 +463,7 @@ def obligation_extraction():
     # Create Client
     logging.info("Processing dataset")
 
-    samples = load_json(Path("data/raw/selected_provisions.json"))
+    samples = load_json(Path(SELECTED_PROVISIONS))
     # random.seed(10)
     random.shuffle(samples)
 
@@ -407,13 +475,14 @@ def obligation_extraction():
 
     start_time = time.time()
     for index, sample in tqdm.tqdm(enumerate(samples)):
-
         logging.info(f"Processed {index + 1} out of {len(samples)}")
+
         expected_finish_time = calculate_expected_finish(start_time, index + 1, len(samples))
         logging.info(f"Expected finish time is {expected_finish_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
         # Run LLM call
-        output, in_token, out_token = run_llm(sentence=sample["sentence"], context=sample["full_text"], model_name=LLM_MODEL)
+        output, in_token, out_token = run_llm(sentence=sample["sentence"], context=sample["full_text"],
+                                              model_name=LLM_MODEL)
         # Put the LLM structure
         target_key = sample["provision_id"] + "_" + str(sample["sentence_id"])
         create_labeling_template(samples=sample, target_key=target_key, llm_output=output,

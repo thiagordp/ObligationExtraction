@@ -156,5 +156,5 @@ venv*/bin/
 *.pyo
 *.pyc
 
-#data/raw
-#data/outputs
+data/raw
+data/outputs

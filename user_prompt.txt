@@ -1,5 +1,0 @@
-**Sentence to analyse:**
-[Write here the sentence]
-
-**Context (Just as reference):**
-[The provision where the sentence appears]

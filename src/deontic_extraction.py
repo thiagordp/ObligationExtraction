@@ -26,6 +26,7 @@ OBLIGATIONS_DATA = "data/raw/ai_act_provisions.json"
 SELECTED_PROVISIONS = "data/raw/selected_provisions.json"
 IGNORED_PROVISIONS = "data/raw/ignored_provisions.json"
 FILTERED_JSON_DATA = "data/raw/obligationsSubjects.json"
+SAMPLE_TEMPLATE = "data/raw/sample_template.txt"
 LLM_MODEL = "llama-3.1-70b-versatile"
 
 SYSTEM_PROMPT = "data/prompts/system_prompt.txt"
@@ -420,7 +421,7 @@ def divide_sample():
 
 def create_labeling_template(samples: dict, target_key: str, llm_output: dict, input_token_count: int,
                              output_token_count: int) -> None:
-    with open("data/raw/sample_template.txt") as fp:
+    with open(SAMPLE_TEMPLATE) as fp:
         template_text = fp.read()
 
     article, paragraph = target_key.split(".")

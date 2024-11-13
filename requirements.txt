@@ -1,0 +1,11 @@
+ollama
+groq
+numpy
+tqdm
+seaborn
+tiktoken
+matplotlib
+sentence-transformers
+pandas
+nltk
+python-dotenv

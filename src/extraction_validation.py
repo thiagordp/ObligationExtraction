@@ -4,6 +4,7 @@ import math
 import os
 import re
 from pathlib import Path
+from sys import excepthook
 
 import numpy as np
 import pandas as pd
@@ -94,6 +95,47 @@ def extract_json_from_file(file_content):
 
     json_data = json.loads(file_content)
     return json_data
+
+
+def extract_metadata_from_file(file_content):
+    # Extract metadata using regex
+    metadata_pattern = r"## Metadata\s+Article:\s*(\S+)\s+Paragraph:\s*(\S+)\s+LLM Model:\s*(\S+)\s+Prompt:\s*(\S+)\s+Timestamp:\s*(\S+)"
+    metadata_match = re.search(metadata_pattern, file_content)
+
+    # If matches found, organize them into a dictionary
+    if metadata_match:
+        return {
+            "Article": metadata_match.group(1),
+            "Paragraph": metadata_match.group(2),
+            "LLM_Model": metadata_match.group(3),
+            "Prompt": metadata_match.group(4),
+            "Timestamp": metadata_match.group(5)
+        }
+    else:
+        return None
+
+
+def extract_context_from_file(file_content):
+    # Extract full provision
+    provision_pattern = r"### Full provision \(For reference\)\s*(.*?)(?=\n## Sentence)"
+    provision_match = re.search(provision_pattern, file_content, re.DOTALL)
+
+    # If matches found, organize them into a dictionary
+    if provision_match:
+        return provision_match.group(1).strip()
+    else:
+        return None
+
+
+def extract_sentence_from_file(file_content: str) -> str:
+    # Extract the sentence using regex
+    sentence_pattern = r"## Sentence \(Processed by the LLM\):\s*(.*?)(?=\n## Evaluation:|$)"
+    sentence_match = re.search(sentence_pattern, file_content, re.DOTALL)
+
+    if sentence_match:
+        return sentence_match.group(1).strip()
+    else:
+        return None
 
 
 def calculate_statistics():
@@ -368,3 +410,71 @@ def calculate_accuracy_and_mean(df):
         results[column] = {'Accuracy': accuracy, 'Mean': mean}
 
     return results
+
+
+def extract_all_as_dict():
+    validation_files = load_validation_files(VALIDATION_FILES_PATH)
+
+    data = []
+
+    for file in validation_files:
+        content = validation_files[file]
+        try:
+            json_content = extract_json_from_file(content)
+        except Exception as e:
+            print(f"Error while processing json: {e}")
+            print("Content: {}".format(content))
+        metadata = extract_metadata_from_file(content)
+        full_provision = extract_context_from_file(content)
+        sentence = extract_sentence_from_file(content)
+
+        if metadata is None:
+            metadata = {}
+            print(f"Metadata not found for file: {content}")
+        metadata["full_provision"] = full_provision
+        metadata["sentence"] = sentence
+        metadata["json_content"] = json_content
+
+        data.append(metadata)
+
+    return data
+
+
+def export_beneficiaries_as_list(target_deontic_structure: list, target_info) -> str:
+    def _process_single_beneficiary(beneficiary):
+        value = beneficiary["value"]
+        stated = beneficiary["stated"]
+        return f"{value} (stated={stated})"
+
+    full_provision = target_deontic_structure["full_provision"]  if "full_provision" in target_deontic_structure else None
+    sentence = target_deontic_structure["sentence"] if "sentence" in target_deontic_structure else None
+    article = target_deontic_structure["Article"] if "Article" in target_deontic_structure else None
+    paragraph = target_deontic_structure["Paragraph"] if "Paragraph" in target_deontic_structure else None
+    template_string = \
+        f"""
+## Article (Paragraph):
+{article} ({paragraph})
+## Full provision (Context):
+{full_provision}
+## Sentence (for LLM):       
+{sentence}"""
+    for index, deontic_relation in enumerate(target_deontic_structure["json_content"]):
+        content_target_info = []
+        if target_info in deontic_relation:
+            content_target_info = [_process_single_beneficiary(b)
+                             for b in deontic_relation[target_info]]
+
+        template_string += \
+            f"""
+### Obligation {index + 1}
+{target_info}:           
+"""
+
+        for b in content_target_info:
+            template_string += f"-> {b}"
+
+    if not (article and paragraph):
+        return ""
+
+    return template_string
+
